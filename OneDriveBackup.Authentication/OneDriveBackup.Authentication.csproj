@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWPF>true</UseWPF>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Meziantou.OneDrive" Version="1.0.4" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.961.33" />
+  </ItemGroup>
+
+</Project>
