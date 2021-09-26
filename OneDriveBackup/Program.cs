@@ -5,7 +5,6 @@ using System.Threading.Channels;
 using Meziantou.OneDrive;
 using Meziantou.OneDrive.Windows;
 using OneDriveBackup;
-using OneDriveBackup.Authentication;
 
 const int MaximumConcurrency = 16;
 
@@ -17,9 +16,17 @@ var paths = new
     BlobsTemp = Path.GetFullPath(Path.Combine(backupFolder, "blobs", "temp")),
 };
 
+int totalItemCount = 0;
+int processingItemCount = 0;
+bool allItemFound = false;
 var onedriveFiles = Channel.CreateBounded<(string FullPath, OneDriveItem OneDriveItem)>(100_000);
 try
 {
+    if (Directory.Exists(paths.BlobsTemp))
+    {
+        Directory.Delete(paths.BlobsTemp, recursive: true);
+    }
+
     await Task.WhenAll(
         Task.Run(() => ListOneDriveFiles()),
         Task.Run(() => ProcessFiles()));
@@ -35,11 +42,13 @@ async Task ListOneDriveFiles()
     try
     {
         // Create client
-        var client = new OneDriveClient
+        var client = new OneDriveClient()
         {
             ApplicationId = "000000004418B915",
-            AuthorizationProvider = new EdgeView2AuthorizationCodeProvider(),
+            AuthorizationProvider = new AuthorizationCodeProvider(),
             RefreshTokenHandler = new CredentialManagerRefreshTokenHandler("OneDriveBackup", Meziantou.Framework.Win32.CredentialPersistence.LocalMachine),
+            AuthenticateOnUnauthenticatedError = true,
+            HandleTooManyRequests = true,
         };
         await client.AuthenticateAsync();
 
@@ -56,6 +65,7 @@ async Task ListOneDriveFiles()
                 var fullPath = folder.FullPath + "/" + child.Name;
                 if (child.File != null)
                 {
+                    Interlocked.Increment(ref totalItemCount);
                     await onedriveFiles.Writer.WriteAsync((fullPath, child));
                 }
                 else if (child.Folder != null)
@@ -73,6 +83,7 @@ async Task ListOneDriveFiles()
     finally
     {
         _ = onedriveFiles.Writer.TryComplete();
+        allItemFound = true;
     }
 }
 
@@ -85,7 +96,8 @@ async Task ProcessFiles()
         {
             try
             {
-                Console.WriteLine("Processing " + fullPath);
+                var currentProcessingCount = Interlocked.Increment(ref processingItemCount);
+                Console.WriteLine($"Processing ({currentProcessingCount}/{totalItemCount}{(allItemFound ? "" : "*")}) {fullPath}");
 
                 // Download item
                 Sha1Value? sha1 = onedriveItem.File.Hashes.Sha1Hash is string value ? new Sha1Value(value) : null;
@@ -174,7 +186,7 @@ async Task<T> RetryAsync<T>(Func<Task<T>> action)
         catch when (count < 5)
         {
             count++;
-            await Task.Delay(1000);
+            await Task.Delay(1000 * count);
         }
     }
 }
