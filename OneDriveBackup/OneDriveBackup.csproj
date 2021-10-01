@@ -14,7 +14,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Meziantou.OneDrive" Version="1.0.6" />
+    <PackageReference Include="Meziantou.OneDrive" Version="1.0.7" />
     <PackageReference Include="Meziantou.OneDrive.Windows" Version="1.0.4" />
   </ItemGroup>
 

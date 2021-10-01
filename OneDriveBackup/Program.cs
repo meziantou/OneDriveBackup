@@ -6,7 +6,8 @@ using Meziantou.OneDrive;
 using Meziantou.OneDrive.Windows;
 using OneDriveBackup;
 
-const int MaximumConcurrency = 16;
+const int MaximumConcurrency = 8;
+var onedriveFiles = Channel.CreateBounded<(string FullPath, OneDriveItem OneDriveItem)>(100);
 
 var backupFolder = args.Length > 0 ? args[0] : "OneDriveBackup";
 var paths = new
@@ -19,7 +20,6 @@ var paths = new
 int totalItemCount = 0;
 int processingItemCount = 0;
 bool allItemFound = false;
-var onedriveFiles = Channel.CreateBounded<(string FullPath, OneDriveItem OneDriveItem)>(100_000);
 try
 {
     if (Directory.Exists(paths.BlobsTemp))
