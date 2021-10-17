@@ -1,4 +1,5 @@
 ﻿using System.Text.Json;
+using System.Threading;
 
 namespace OneDriveBackup;
 
@@ -9,12 +10,13 @@ internal class IndexWriter : IAsyncDisposable
     private readonly string _filePath;
     private readonly FileStream _fileStream;
     private readonly Utf8JsonWriter _writer;
+    private readonly SemaphoreSlim _semaphoreSlim = new SemaphoreSlim(1, 1);
 
     public IndexWriter(string filePath)
     {
         _filePath = filePath;
         Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
-        _fileStream = new FileStream(filePath + TemporaryExtensionName, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
+        _fileStream = new FileStream(filePath + TemporaryExtensionName, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, bufferSize: 0);
         _writer = new Utf8JsonWriter(_fileStream, new JsonWriterOptions() { Indented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         _writer.WriteStartObject();
         _writer.WriteNumber("Version", 1);
@@ -22,9 +24,10 @@ internal class IndexWriter : IAsyncDisposable
         _writer.WriteStartArray("Files");
     }
 
-    public void AddFile(string path, Sha1Value sha1, long fileSize, DateTime createdAtUtc, DateTime lastModifiedAtUtc)
+    public async Task AddFileAsync(string path, Sha1Value sha1, long fileSize, DateTime createdAtUtc, DateTime lastModifiedAtUtc)
     {
-        lock (_writer)
+        await _semaphoreSlim.WaitAsync();
+        try
         {
             _writer.WriteStartObject();
             _writer.WriteString("Path", path);
@@ -33,6 +36,11 @@ internal class IndexWriter : IAsyncDisposable
             _writer.WriteString("CreateAtUtc", createdAtUtc);
             _writer.WriteString("LastModifiedAtUtc", lastModifiedAtUtc);
             _writer.WriteEndObject();
+            await _writer.FlushAsync();
+        }
+        finally
+        {
+            _semaphoreSlim.Release();
         }
     }
 
@@ -43,6 +51,7 @@ internal class IndexWriter : IAsyncDisposable
 
         await _writer.DisposeAsync();
         await _fileStream.DisposeAsync();
-        System.IO.File.Move(_filePath + TemporaryExtensionName, _filePath, overwrite: false);
+        _semaphoreSlim.Dispose();
+        File.Move(_filePath + TemporaryExtensionName, _filePath, overwrite: false);
     }
 }

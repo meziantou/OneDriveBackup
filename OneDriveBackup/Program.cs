@@ -10,6 +10,7 @@ const int MaximumConcurrency = 8;
 var onedriveFiles = Channel.CreateBounded<(string FullPath, OneDriveItem OneDriveItem)>(100);
 
 var backupFolder = args.Length > 0 ? args[0] : "OneDriveBackup";
+Console.WriteLine("Backup folder: " + backupFolder);
 var paths = new
 {
     Index = Path.GetFullPath(Path.Combine(backupFolder, "index." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfffffff", CultureInfo.InvariantCulture) + ".json")),
@@ -90,7 +91,7 @@ async Task ListOneDriveFiles()
 async Task ProcessFiles()
 {
     await using var index = new IndexWriter(paths.Index);
-    await Parallel.ForEachAsync(Enumerable.Repeat(0, MaximumConcurrency), async (_, cancellationToken) =>
+    await Parallel.ForEachAsync(Enumerable.Range(0, MaximumConcurrency), async (i, cancellationToken) =>
     {
         await foreach (var (fullPath, onedriveItem) in onedriveFiles.Reader.ReadAllAsync(cancellationToken))
         {
@@ -117,7 +118,7 @@ async Task ProcessFiles()
                 }
 
                 // Write index
-                index.AddFile(fullPath, sha1.Value, onedriveItem.Size, onedriveItem.CreatedDateTime, onedriveItem.LastModifiedDateTime);
+                await index.AddFileAsync(fullPath, sha1.Value, onedriveItem.Size, onedriveItem.CreatedDateTime, onedriveItem.LastModifiedDateTime);
             }
             catch (Exception ex)
             {
@@ -125,7 +126,11 @@ async Task ProcessFiles()
                 throw;
             }
         }
+
+        Console.WriteLine("Worker " + i + " ended");
     });
+
+    Console.WriteLine("Writing index");
 }
 
 string GetBlobPath(Sha1Value sha1)
@@ -163,7 +168,15 @@ async Task<Sha1Value> DownloadBlobAsync(Stream stream, Sha1Value? expectedSha1, 
 
     var dest = GetBlobPath(sha1);
     Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-    System.IO.File.Move(tempPath, dest, overwrite: true);
+    try
+    {
+        await RetryAction(() => System.IO.File.Move(tempPath, dest, overwrite: true));
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Cannot move file to {dest}: " + ex.ToString());
+    }
+
     return sha1;
 }
 
@@ -172,6 +185,24 @@ Sha1Value ComputeSha1(string filePath)
     using var fs = System.IO.File.OpenRead(filePath);
     using var hash = SHA1.Create();
     return new Sha1Value(Convert.ToHexString(hash.ComputeHash(fs)));
+}
+
+async ValueTask RetryAction(Action action)
+{
+    int count = 0;
+    while (true)
+    {
+        try
+        {
+            action();
+            return;
+        }
+        catch when (count < 5)
+        {
+            count++;
+            await Task.Delay(1000 * count);
+        }
+    }
 }
 
 async Task<T> RetryAsync<T>(Func<Task<T>> action)
