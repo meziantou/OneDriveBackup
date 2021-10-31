@@ -20,6 +20,7 @@ var paths = new
 
 int totalItemCount = 0;
 int processingItemCount = 0;
+int errorCount = 0;
 bool allItemFound = false;
 try
 {
@@ -34,9 +35,11 @@ try
 }
 catch (Exception ex)
 {
-    Console.WriteLine(ex);
+    Console.Error.WriteLine(ex);
     throw;
 }
+
+return errorCount;
 
 async Task ListOneDriveFiles()
 {
@@ -79,7 +82,8 @@ async Task ListOneDriveFiles()
     catch (Exception ex)
     {
         onedriveFiles.Writer.Complete(ex);
-        Console.WriteLine(ex);
+        Console.Error.WriteLine(ex);
+        Interlocked.Increment(ref errorCount);
     }
     finally
     {
@@ -95,13 +99,20 @@ async Task ProcessFiles()
     {
         await foreach (var (fullPath, onedriveItem) in onedriveFiles.Reader.ReadAllAsync(cancellationToken))
         {
+            if (onedriveItem.File is null)
+            {
+                Console.Error.WriteLine($"Cannot backup file '{fullPath}', file is null");
+                Interlocked.Increment(ref errorCount);
+                continue;
+            }
+
             try
             {
                 var currentProcessingCount = Interlocked.Increment(ref processingItemCount);
                 Console.WriteLine($"Processing ({currentProcessingCount}/{totalItemCount}{(allItemFound ? "" : "*")}) {fullPath}");
 
                 // Download item
-                Sha1Value? sha1 = onedriveItem.File.Hashes.Sha1Hash is string value ? new Sha1Value(value) : null;
+                Sha1Value? sha1 = onedriveItem.File.Hashes?.Sha1Hash is string value ? new Sha1Value(value) : null;
                 if (sha1 != null)
                 {
                     var path = GetBlobPath(sha1.Value);
@@ -122,7 +133,8 @@ async Task ProcessFiles()
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex);
+                Console.Error.WriteLine(ex);
+                Interlocked.Increment(ref errorCount);
                 throw;
             }
         }
@@ -163,6 +175,7 @@ async Task<Sha1Value> DownloadBlobAsync(Stream stream, Sha1Value? expectedSha1, 
     var sha1 = ComputeSha1(tempPath);
     if (expectedSha1 != null && sha1 != expectedSha1)
     {
+        Interlocked.Increment(ref errorCount);
         throw new Exception("File hash differ");
     }
 
@@ -174,7 +187,8 @@ async Task<Sha1Value> DownloadBlobAsync(Stream stream, Sha1Value? expectedSha1, 
     }
     catch (Exception ex)
     {
-        Console.WriteLine($"Cannot move file to {dest}: " + ex.ToString());
+        Interlocked.Increment(ref errorCount);
+        Console.Error.WriteLine($"Cannot move file to {dest}: " + ex.ToString());
     }
 
     return sha1;
