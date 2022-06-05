@@ -10,7 +10,9 @@ const int MaximumConcurrency = 8;
 var onedriveFiles = Channel.CreateBounded<(string FullPath, OneDriveItem OneDriveItem)>(100);
 
 var backupFolder = args.Length > 0 ? args[0] : "OneDriveBackup";
+var localFolder = args.Length > 1 ? args[1] : null;
 Console.WriteLine("Backup folder: " + backupFolder);
+Console.WriteLine("Local folder: " + localFolder);
 var paths = new
 {
     Index = Path.GetFullPath(Path.Combine(backupFolder, "index." + DateTime.UtcNow.ToString("yyyyMMdd-HHmmssfffffff", CultureInfo.InvariantCulture) + ".json")),
@@ -118,8 +120,31 @@ async Task ProcessFiles()
                     var path = GetBlobPath(sha1.Value);
                     if (!System.IO.File.Exists(path))
                     {
-                        using var stream = await RetryAsync(() => onedriveItem.DownloadAsync(cancellationToken));
-                        await DownloadBlobAsync(stream, sha1, onedriveItem.Size);
+                        // find local file and check existing sha1
+                        var handled = false;
+                        if (localFolder != null)
+                        {
+                            var localFile = Path.Join(localFolder, fullPath);
+                            if (System.IO.File.Exists(localFile))
+                            {
+                                var localSha1 = ComputeSha1(localFile);
+                                if (localSha1 == sha1)
+                                {
+                                    var tempPath = Path.Combine(paths.BlobsTemp, Guid.NewGuid().ToString("N"));
+                                    Directory.CreateDirectory(Path.GetDirectoryName(tempPath)!);
+                                    System.IO.File.Copy(localFile, tempPath);
+                                    await CopyFileToBlobs(tempPath, localSha1);
+                                    handled = true;
+                                }
+                            }
+                        }
+
+                        // Download file from onedrive
+                        if (!handled)
+                        {
+                            using var stream = await RetryAsync(() => onedriveItem.DownloadAsync(cancellationToken));
+                            await DownloadBlobAsync(stream, sha1, onedriveItem.Size);
+                        }
                     }
                 }
                 else
@@ -179,19 +204,23 @@ async Task<Sha1Value> DownloadBlobAsync(Stream stream, Sha1Value? expectedSha1, 
         throw new Exception("File hash differ");
     }
 
-    var dest = GetBlobPath(sha1);
+    await CopyFileToBlobs(tempPath, sha1);
+    return sha1;
+}
+
+async Task CopyFileToBlobs(string path, Sha1Value hash)
+{
+    var dest = GetBlobPath(hash);
     Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
     try
     {
-        await RetryAction(() => System.IO.File.Move(tempPath, dest, overwrite: true));
+        await RetryAction(() => System.IO.File.Move(path, dest, overwrite: true));
     }
     catch (Exception ex)
     {
         Interlocked.Increment(ref errorCount);
         Console.Error.WriteLine($"Cannot move file to {dest}: " + ex.ToString());
     }
-
-    return sha1;
 }
 
 Sha1Value ComputeSha1(string filePath)
